@@ -36,7 +36,7 @@ email='yourname@example.com'
 ## Begin Install
 
 ## Update apt
-yum update
+yum -y update
 
 ## Install the apache web server
 yum -y install httpd
@@ -53,9 +53,8 @@ sed -i "s/#ServerName www.example.com:80/ServerName $server_name/" /etc/httpd/co
 vhost_server=\
 "
 <VirtualHost ${server_name}:80>
-    DocumentRoot '/var/www/html/nextcloud'
-    ServerName $server_name
-
+   ServerName $server_name
+   Redirect permanent / https://$server_name/
 </VirtualHost>
 "
 echo "$vhost_server" > /etc/httpd/conf.d/nextcloud.conf
@@ -98,7 +97,7 @@ if ! [ -z $common_name ]; then
     ## Append a default virtual host to answer to https requests
     default_append=\
 "
-<VirtualHost *:443>
+<VirtualHost ${server_name}:443>
     ServerName ${server_name}
     DocumentRoot /var/www/html/nextcloud
     ErrorLog /var/log/httpd/error.log
@@ -109,6 +108,10 @@ if ! [ -z $common_name ]; then
     SSLCertificateKeyFile /etc/httpd/ssl/${server_name}.key
 ##  For self-signed
     SSLCACertificateFile /etc/httpd/ssl/${server_name}.crt
+
+    <IfModule mod_headers.c>
+      Header always set Strict-Transport-Security 'max-age=15552000; includeSubDomains'
+    </IfModule>
 </VirtualHost>
 "
     echo "$default_append" >> /etc/httpd/conf.d/nextcloud.conf
@@ -140,7 +143,7 @@ yum-config-manager --enable remi-php70
 
 
 ## Install php dependencies (notice! php version >7) 
-yum -y install php php-mysql php-fpm php-pecl-zip php-xml php-mbstring php-gd php-posix
+yum -y install php php-mysql php-fpm php-pecl-zip php-xml php-mbstring php-gd php-ldap php-posix
 
 ## Check that we have the PHP modules loaded in apache
 ## It will output "php7_module (shared)"
@@ -150,6 +153,14 @@ apachectl -M |grep php
 sed -i "s/post_max_size = 8M/post_max_size = 100M/" /etc/php.ini
 sed -i "s/upload_max_filesize = 2M/upload_max_filesize = 1000M/" /etc/php.ini
 
+
+## Install caching services to improve the performance
+yum -y install memcached php-pecl-memcached php-pecl-apcu redis php-pecl-redis
+
+systemctl enable memcached
+systemctl start memcached
+systemctl enable redis
+systemctl start redis
 
 
 ## Download the Nexcloud package
@@ -211,12 +222,23 @@ sudo -u apache php occ config:system:set datadirectory --value=$data_dir_path
 #sudo -u apache php occ config:system:get trusted_domain
 sudo -u apache php occ config:system:set trusted_domains 0 --value=$server_name
 
+## Setup caching
+sudo -u apache php occ config:system:set memcache.local --value='\OC\Memcache\APCu'
+#sudo -u apache php occ config:system:set memcache.distributed --value='\OC\Memcache\Memcached'
+## For larger deployments
+sudo -u apache php occ config:system:set memcache.locking --value='\OC\Memcache\Redis'
+sudo -u apache php occ config:system:set redis host --value='127.0.0.1'
+sudo -u apache php occ config:system:set redis port --value='6379'
+
+
 ## If the system is using $http_proxy, use it for Nextcloud too
 [ -z $http_proxy ] || sudo -u apache php occ config:system:set proxy --value=$http_proxy
 
 ## Remove the /index.php from the URL to make it cleaner
 sudo -u apache php occ config:system:set htaccess.RewriteBase --value='/'
 sudo -u apache php occ maintenance:update:htaccess
+
+
 
 
 
